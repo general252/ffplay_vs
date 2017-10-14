@@ -2446,6 +2446,7 @@ static int audio_open(void *opaque, int64_t wanted_channel_layout, int wanted_nb
     wanted_spec.samples = FFMAX(SDL_AUDIO_MIN_BUFFER_SIZE, 2 << av_log2(wanted_spec.freq / SDL_AUDIO_MAX_CALLBACKS_PER_SEC));
     wanted_spec.callback = sdl_audio_callback;
     wanted_spec.userdata = opaque;
+    // SDL播放音频示例 http://blog.csdn.net/leixiaohua1020/article/details/40544521
     while (SDL_OpenAudio(&wanted_spec, &spec) < 0) {
         av_log(NULL, AV_LOG_WARNING, "SDL_OpenAudio (%d channels, %d Hz): %s\n",
                wanted_spec.channels, wanted_spec.freq, SDL_GetError());
@@ -3619,6 +3620,20 @@ static int lockmgr(void **mtx, enum AVLockOp op)
 /* Called from the main */
 int main(int argc, char **argv)
 {
+    /** ffplay.c
+                        (SDL事件驱动)
+    main - stream_open - event_loop - refresh_loop_wait_event - video_refresh - video_display(video_open、SDL_RenderPresent)
+                    - read_thread (读取packet加入到队列中)
+                          - stream_component_open - audio_open {SDL_OpenAudio、sdl_audio_callback[SDL_MixAudio]}
+                                 - audio_thread    (decoder_start) (创建音视频解码线程)
+                                 - video_thread    (decoder_start) (创建音视频解码线程)
+                                 - subtitle_thread (decoder_start) (创建音视频解码线程)
+
+    main thread: event_loop SDL事件驱动
+    read thread: 媒体文件读取线程
+   audio thread: 音频解码线程
+   video thread: 视频解码线程
+    */
     int flags;
     VideoState *is;
 
