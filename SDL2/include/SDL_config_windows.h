@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2017 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2016 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -21,7 +21,6 @@
 
 #ifndef SDL_config_windows_h_
 #define SDL_config_windows_h_
-#define SDL_config_h_
 
 #include "SDL_platform.h"
 
@@ -155,9 +154,8 @@ typedef unsigned int uintptr_t;
 #endif
 
 /* Enable various audio drivers */
-#define SDL_AUDIO_DRIVER_WASAPI 1
 #define SDL_AUDIO_DRIVER_DSOUND 1
-#define SDL_AUDIO_DRIVER_XAUDIO2    0
+#define SDL_AUDIO_DRIVER_XAUDIO2    1
 #define SDL_AUDIO_DRIVER_WINMM  1
 #define SDL_AUDIO_DRIVER_DISK   1
 #define SDL_AUDIO_DRIVER_DUMMY  1
@@ -208,8 +206,6 @@ typedef unsigned int uintptr_t;
 #define SDL_VIDEO_OPENGL_EGL    1
 #endif
 
-/* Enable Vulkan support */
-#define SDL_VIDEO_VULKAN 1
 
 /* Enable system power support */
 #define SDL_POWER_WINDOWS 1

@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2017 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2016 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -107,7 +107,7 @@
 /**
  *  The prototype for the application's main() function
  */
-extern C_LINKAGE DECLSPEC int SDL_main(int argc, char *argv[]);
+extern C_LINKAGE int SDL_main(int argc, char *argv[]);
 
 
 #include "begin_code.h"
