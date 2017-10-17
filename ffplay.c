@@ -142,8 +142,8 @@ typedef struct AudioParams {
 
 typedef struct Clock {
     double pts;           /* clock base */
-    double pts_drift;     /* clock base minus time at which we updated the clock */
-    double last_updated;
+    double pts_drift;     /* clock base minus time at which we updated the clock */ //! pts_drift = pts - time
+    double last_updated;                                                            //! last_updated = time
     double speed;
     int serial;           /* clock is based on a packet with this serial */
     int paused;
@@ -202,15 +202,15 @@ typedef struct Decoder {
 } Decoder;
 
 typedef struct VideoState {
-    SDL_Thread *read_tid;
+    SDL_Thread *read_tid; //! 媒体包读取线程 read_thread, Demux解复用线程, 读视频文件stream线程, 得到AVPacket, 并对packet入栈
     AVInputFormat *iformat;
-    int abort_request;
-    int force_refresh;
-    int paused;
-    int last_paused;
+    int abort_request; //! 媒体包读取结束标志 stream_close、read_thread
+    int force_refresh; //! 刷新标志
+    int paused; //! 暂停、播放标志
+    int last_paused; //! read_thread线程 暂停、播放标志
     int queue_attachments_req;
-    int seek_req;
-    int seek_flags;
+    int seek_req; //! 进度控制标志
+    int seek_flags; //! seek 是否使用 AVSEEK_FLAG_BYTE
     int64_t seek_pos;
     int64_t seek_rel;
     int read_pause_return;
@@ -231,7 +231,8 @@ typedef struct VideoState {
 
     int audio_stream;
 
-    int av_sync_type;
+    int av_sync_type; //! 视频同步音频还是音频同步视频av_sync_type, 默认AV_SYNC_AUDIO_MASTER(视频同步音频)
+                      //! 因为音频是采样数据, 有固定的采用周期并且依赖于主系统时钟, 要调整音频的延时播放较难控制. 所以实际场合中视频同步音频相比音频同步视频实现起来更容易
 
     double audio_clock;
     int audio_clock_serial;
@@ -249,7 +250,7 @@ typedef struct VideoState {
     int audio_buf_index; /* in bytes */
     int audio_write_buf_size;
     int audio_volume;
-    int muted;
+    int muted; // 缄默(是否静音)
     struct AudioParams audio_src;
 #if CONFIG_AVFILTER
     struct AudioParams audio_filter_src;
@@ -278,7 +279,7 @@ typedef struct VideoState {
     AVStream *subtitle_st;
     PacketQueue subtitleq;
 
-    double frame_timer;
+    double frame_timer; //! frame_time是delay的累加值
     double frame_last_returned_time;
     double frame_last_filter_delay;
     int video_stream;
@@ -304,7 +305,7 @@ typedef struct VideoState {
 
     int last_video_stream, last_audio_stream, last_subtitle_stream;
 
-    SDL_cond *continue_read_thread;
+    SDL_cond *continue_read_thread; // read_thread 条件变量, SDL_CondWait: 等待条件变量, SDL_CondSignal: 激活信号
 } VideoState;
 
 /* options specified by the user */
@@ -1469,23 +1470,25 @@ static double compute_target_delay(double delay, VideoState *is)
 {
     double sync_threshold, diff = 0;
 
+    //! 因为音频是采样数据, 有固定的采用周期并且依赖于主系统时钟, 要调整音频的延时播放较难控制. 所以实际场合中视频同步音频相比音频同步视频实现起来更容易
     /* update delay to follow master synchronisation source */
     if (get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER) {
         /* if video is slave, we try to correct big delays by
            duplicating or deleting a frame */
+        //! 获取当前视频帧播放的时间, 与系统主时钟时间相减得到差值
         diff = get_clock(&is->vidclk) - get_master_clock(is);
 
         /* skip or repeat frame. We take into account the
            delay to compute the threshold. I still don't know
            if it is the best guess */
-        sync_threshold = FFMAX(AV_SYNC_THRESHOLD_MIN, FFMIN(AV_SYNC_THRESHOLD_MAX, delay));
+        sync_threshold = FFMAX(AV_SYNC_THRESHOLD_MIN, FFMIN(AV_SYNC_THRESHOLD_MAX, delay)); //! sync_threshold > AV_SYNC_THRESHOLD_MIN > 0
         if (!isnan(diff) && fabs(diff) < is->max_frame_duration) {
             if (diff <= -sync_threshold)
-                delay = FFMAX(0, delay + diff);
+                delay = FFMAX(0, delay + diff); //! diff < sync_threshold < 0, 将 delay置为0 (当前帧的播放时间，也就是pts，滞后于主时钟)
             else if (diff >= sync_threshold && delay > AV_SYNC_FRAMEDUP_THRESHOLD)
-                delay = delay + diff;
+                delay = delay + diff; //! 假如当前帧的播放时间(pts), 超前于主时钟, 并且delay还不小
             else if (diff >= sync_threshold)
-                delay = 2 * delay;
+                delay = 2 * delay; //! 假如当前帧的播放时间(pts)，超前于主时钟，那就需要加大延时
         }
     }
 
@@ -1557,22 +1560,22 @@ retry:
                 goto display;
 
             /* compute nominal last_duration */
-            last_duration = vp_duration(is, lastvp, vp);
-            delay = compute_target_delay(last_duration, is);
+            last_duration = vp_duration(is, lastvp, vp); //! 将当前帧vp的pts减去上一帧lastvp的pts, 得到中间时间差, 并检查差值是否在合理范围
+            delay = compute_target_delay(last_duration, is); //! 以视频或音频为参考标准, 控制延时来保证音视频的同步
 
-            time= av_gettime_relative()/1000000.0;
-            if (time < is->frame_timer + delay) {
+            time= av_gettime_relative()/1000000.0; //! 获取当前时间
+            if (time < is->frame_timer + delay) {  //! 假如当前时间小于frame_timer + delay, 也就是这帧改显示的时间超前, 还没到, 跳转处理
                 *remaining_time = FFMIN(is->frame_timer + delay - time, *remaining_time);
                 goto display;
             }
 
-            is->frame_timer += delay;
+            is->frame_timer += delay; //! 根据音频时钟, 只要需要延时, 即delay大于0, 就需要更新累加到frame_timer当中
             if (delay > 0 && time - is->frame_timer > AV_SYNC_THRESHOLD_MAX)
-                is->frame_timer = time;
+                is->frame_timer = time; //! 更新frame_timer, frame_time是delay的累加值
 
             SDL_LockMutex(is->pictq.mutex);
             if (!isnan(vp->pts))
-                update_video_pts(is, vp->pts, vp->pos, vp->serial);
+                update_video_pts(is, vp->pts, vp->pos, vp->serial);  //! 更新is当中当前帧的pts
             SDL_UnlockMutex(is->pictq.mutex);
 
             if (frame_queue_nb_remaining(&is->pictq) > 1) {
@@ -3214,29 +3217,29 @@ static void event_loop(VideoState *cur_stream)
             switch (event.key.keysym.sym) {
             case SDLK_ESCAPE:
             case SDLK_q:
-                do_exit(cur_stream);
+                do_exit(cur_stream); // 退出
                 break;
             case SDLK_f:
-                toggle_full_screen(cur_stream);
+                toggle_full_screen(cur_stream); // 全屏
                 cur_stream->force_refresh = 1;
                 break;
             case SDLK_p:
             case SDLK_SPACE:
-                toggle_pause(cur_stream);
+                toggle_pause(cur_stream); // 播放/暂停
                 break;
             case SDLK_m:
-                toggle_mute(cur_stream);
+                toggle_mute(cur_stream); // 是否静音
                 break;
             case SDLK_KP_MULTIPLY:
             case SDLK_0:
-                update_volume(cur_stream, 1, SDL_VOLUME_STEP);
+                update_volume(cur_stream, 1, SDL_VOLUME_STEP); // 声音增大
                 break;
             case SDLK_KP_DIVIDE:
             case SDLK_9:
-                update_volume(cur_stream, -1, SDL_VOLUME_STEP);
+                update_volume(cur_stream, -1, SDL_VOLUME_STEP); // 声音减小
                 break;
             case SDLK_s: // S: Step to next frame
-                step_to_next_frame(cur_stream);
+                step_to_next_frame(cur_stream); // 下一帧
                 break;
             case SDLK_a:
                 stream_cycle_channel(cur_stream, AVMEDIA_TYPE_AUDIO);
@@ -3634,7 +3637,7 @@ int main(int argc, char **argv)
 #if CONFIG_AVFILTER
     avfilter_register_all();
 #endif
-    av_register_all();
+    av_register_all(); //! 注册所有编码器和解码器
     avformat_network_init();
 
     init_opts();
@@ -3642,9 +3645,9 @@ int main(int argc, char **argv)
     signal(SIGINT , sigterm_handler); /* Interrupt (ANSI).    */
     signal(SIGTERM, sigterm_handler); /* Termination (ANSI).  */
 
-    show_banner(argc, argv, options);
+    show_banner(argc, argv, options); //! 打印输出FFmpeg版本信息（编译时间，编译选项，类库信息等）
 
-    parse_options(NULL, argc, argv, options, opt_input_file);
+    parse_options(NULL, argc, argv, options, opt_input_file); //! 解析输入的命令
 
     if (!input_filename) {
         show_usage();
@@ -3685,13 +3688,13 @@ int main(int argc, char **argv)
     av_init_packet(&flush_pkt);
     flush_pkt.data = (uint8_t *)&flush_pkt;
 
-    is = stream_open(input_filename, file_iformat);
+    is = stream_open(input_filename, file_iformat); //! 打开输入媒体
     if (!is) {
         av_log(NULL, AV_LOG_FATAL, "Failed to initialize VideoState!\n");
         do_exit(NULL);
     }
 
-    event_loop(is);
+    event_loop(is); //! 处理各种消息，不停地循环下去
 
     /* never returns */
 
