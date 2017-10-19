@@ -1,4 +1,5 @@
 #define inline __inline
+
 #include <math.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -26,6 +27,7 @@
 
 #include <SDL.h>
 #include <SDL_thread.h>
+// #define SDL_main main
 
 
 #define MAX_QUEUE_SIZE (15 * 1024 * 1024)
@@ -155,7 +157,7 @@ enum {
 typedef struct Decoder {
     AVPacket pkt;
     AVPacket pkt_temp;
-    PacketQueue *queue;
+    PacketQueue *queue; // 绑定is->videoq、is->audioq、is->subtitleq
     AVCodecContext *avctx;
     int pkt_serial;
     int finished;
@@ -210,11 +212,11 @@ typedef struct VideoState {
     AVStream *audio_st;
     PacketQueue audioq;
     int audio_hw_buf_size;
-    uint8_t *audio_buf;
+    uint8_t *audio_buf; // 音频缓冲区
     uint8_t *audio_buf1;
     unsigned int audio_buf_size; /* in bytes */
     unsigned int audio_buf1_size;
-    int audio_buf_index; /* in bytes */
+    int audio_buf_index; /* in bytes */ // 音频缓冲区偏移
     int audio_write_buf_size;
     int audio_volume;
     int muted; // 缄默(是否静音)
@@ -248,7 +250,7 @@ typedef struct VideoState {
     double frame_last_returned_time;
     double frame_last_filter_delay;
     int video_stream;
-    AVStream *video_st;
+    AVStream *video_st; // 视频流
     PacketQueue videoq;
     double max_frame_duration;      // maximum duration of a frame - above this, we consider the jump a timestamp discontinuity
     struct SwsContext *img_convert_ctx;
@@ -2396,35 +2398,46 @@ static int decoder_start(Decoder *d, int(*fn)(void *), void *arg)
     return 0;
 }
 
-static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
+static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub)
+{
     int got_frame = 0;
 
     do {
         int ret = -1;
 
-        if (d->queue->abort_request)
+        if (d->queue->abort_request) {
             return -1;
+        }
 
-        if (!d->packet_pending || d->queue->serial != d->pkt_serial) {
+        if (!d->packet_pending || d->queue->serial != d->pkt_serial)
+        {
             AVPacket pkt;
+
             do {
-                if (d->queue->nb_packets == 0)
+                if (d->queue->nb_packets == 0) {
                     SDL_CondSignal(d->empty_queue_cond);
-                if (packet_queue_get(d->queue, &pkt, 1, &d->pkt_serial) < 0)
+                }
+
+                if (packet_queue_get(d->queue, &pkt, 1, &d->pkt_serial) < 0) {
                     return -1;
-                if (pkt.data == flush_pkt.data) {
+                }
+
+                if (pkt.data == flush_pkt.data)
+                {
                     avcodec_flush_buffers(d->avctx);
                     d->finished = 0;
                     d->next_pts = d->start_pts;
                     d->next_pts_tb = d->start_pts_tb;
                 }
             } while (pkt.data == flush_pkt.data || d->queue->serial != d->pkt_serial);
+
             av_packet_unref(&d->pkt);
             d->pkt_temp = d->pkt = pkt;
             d->packet_pending = 1;
         }
 
-        switch (d->avctx->codec_type) {
+        switch (d->avctx->codec_type)
+        {
         case AVMEDIA_TYPE_VIDEO:
             ret = avcodec_decode_video2(d->avctx, frame, &got_frame, &d->pkt_temp);
             if (got_frame) {
@@ -2440,10 +2453,12 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
             ret = avcodec_decode_audio4(d->avctx, frame, &got_frame, &d->pkt_temp);
             if (got_frame) {
                 AVRational tb = (AVRational){ 1, frame->sample_rate };
-                if (frame->pts != AV_NOPTS_VALUE)
+                if (frame->pts != AV_NOPTS_VALUE) {
                     frame->pts = av_rescale_q(frame->pts, av_codec_get_pkt_timebase(d->avctx), tb);
-                else if (d->next_pts != AV_NOPTS_VALUE)
+                } else if (d->next_pts != AV_NOPTS_VALUE) {
                     frame->pts = av_rescale_q(d->next_pts, d->next_pts_tb, tb);
+                }
+
                 if (frame->pts != AV_NOPTS_VALUE) {
                     d->next_pts = frame->pts + frame->nb_samples;
                     d->next_pts_tb = tb;
@@ -2947,6 +2962,7 @@ static int read_thread(void *arg)
         }
 
         /* if the queue are full, no need to read more */
+        /** 队列数据满, 不读取数据 */ 
         if (infinite_buffer < 1 &&
             (is->audioq.size + is->videoq.size + is->subtitleq.size > MAX_QUEUE_SIZE ||
             (stream_has_enough_packets(is->audio_st, is->audio_stream, &is->audioq) &&
@@ -3008,7 +3024,21 @@ static int read_thread(void *arg)
         /* check if packet is in play range specified by user, then queue, otherwise discard */
         stream_start_time = ic->streams[pkt->stream_index]->start_time;
         pkt_ts = (pkt->pts == AV_NOPTS_VALUE) ? pkt->dts : pkt->pts;
-        pkt_in_play_range = duration == AV_NOPTS_VALUE || (pkt_ts - (stream_start_time != AV_NOPTS_VALUE ? stream_start_time : 0)) * av_q2d(ic->streams[pkt->stream_index]->time_base) - (double)(start_time != AV_NOPTS_VALUE ? start_time : 0) / 1000000 <= ((double)duration / 1000000); // 日了狗！！！！！
+
+        {
+            int64_t tmp_stream_start_time = (stream_start_time != AV_NOPTS_VALUE) ? stream_start_time : 0;
+            int64_t tmp_start_time = (start_time != AV_NOPTS_VALUE) ? start_time : 0;
+            double diff_start_time = (pkt_ts - tmp_stream_start_time)* av_q2d(ic->streams[pkt->stream_index]->time_base) - (double)(tmp_start_time) / 1000000;
+
+            if ( duration == AV_NOPTS_VALUE ||
+                 diff_start_time <= duration / 1000000.0 )
+            {
+                pkt_in_play_range = 1;
+            }
+            else {
+                pkt_in_play_range = 0;
+            }
+        }
 
         if (pkt->stream_index == is->audio_stream && pkt_in_play_range) {
             packet_queue_put(&is->audioq, pkt);
@@ -3022,7 +3052,7 @@ static int read_thread(void *arg)
         else {
             av_packet_unref(pkt);
         }
-    }
+    } // end while (1)
 
     ret = 0;
 
@@ -3100,21 +3130,26 @@ static int video_thread(void *arg)
         return AVERROR(ENOMEM);
     }
 
-    for (;;) {
+    while (1)
+    {
         ret = get_video_frame(is, frame);
-        if (ret < 0)
+        if (ret < 0) {
             goto the_end;
-        if (!ret)
+        }
+        if (0 == ret) {
             continue;
+        }
 
         duration = (frame_rate.num && frame_rate.den ? av_q2d((AVRational){ frame_rate.den, frame_rate.num }) : 0);
         pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
         ret = queue_picture(is, frame, pts, duration, av_frame_get_pkt_pos(frame), is->viddec.pkt_serial);
         av_frame_unref(frame);
 
-        if (ret < 0)
+        if (ret < 0) {
             goto the_end;
+        }
     }
+
 the_end:
     av_frame_free(&frame);
     return 0;

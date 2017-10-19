@@ -1,9 +1,5 @@
 #include "play.h"
 
-#include <SDL.h>
-#include <SDL_thread.h>
-#define SDL_main main
-
 #pragma comment(lib, "avcodec.lib")
 #pragma comment(lib, "avformat.lib")
 #pragma comment(lib, "avutil.lib")
