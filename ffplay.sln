@@ -1,7 +1,11 @@
 ﻿
-Microsoft Visual Studio Solution File, Format Version 11.00
-# Visual Studio 2010
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 2013
+VisualStudioVersion = 12.0.21005.1
+MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ffplay", "ffplay.vcxproj", "{3232FB05-5161-4FA5-8FB9-297AFA976269}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "myffplay", "myffplay\myffplay.vcxproj", "{3F20D9E4-90A9-4922-A7E7-EA3070A8CF14}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -13,6 +17,10 @@ Global
 		{3232FB05-5161-4FA5-8FB9-297AFA976269}.Debug|Win32.Build.0 = Debug|Win32
 		{3232FB05-5161-4FA5-8FB9-297AFA976269}.Release|Win32.ActiveCfg = Release|Win32
 		{3232FB05-5161-4FA5-8FB9-297AFA976269}.Release|Win32.Build.0 = Release|Win32
+		{3F20D9E4-90A9-4922-A7E7-EA3070A8CF14}.Debug|Win32.ActiveCfg = Debug|Win32
+		{3F20D9E4-90A9-4922-A7E7-EA3070A8CF14}.Debug|Win32.Build.0 = Debug|Win32
+		{3F20D9E4-90A9-4922-A7E7-EA3070A8CF14}.Release|Win32.ActiveCfg = Release|Win32
+		{3F20D9E4-90A9-4922-A7E7-EA3070A8CF14}.Release|Win32.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
