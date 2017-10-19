@@ -956,8 +956,10 @@ static int queue_picture(VideoState *is, AVFrame *src_frame, double pts, double 
     printf("frame_type=%c pts=%0.3f\n", av_get_picture_type_char(src_frame->pict_type), pts);
 #endif
 
-    if (!(vp = frame_queue_peek_writable(&is->pictq)))
+    vp = frame_queue_peek_writable(&is->pictq);
+    if (NULL == vp) {
         return -1;
+    }
 
     vp->sar = src_frame->sample_aspect_ratio;
     vp->uploaded = 0;
@@ -995,7 +997,7 @@ static int get_video_frame(VideoState *is, AVFrame *frame)
 
         frame->sample_aspect_ratio = av_guess_sample_aspect_ratio(is->ic, is->video_st, frame);
 
-        if (framedrop>0 || (framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER))
+        if (framedrop > 0 || (framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER))
         {
             if (frame->pts != AV_NOPTS_VALUE)
             {
@@ -2143,14 +2145,14 @@ static Frame *frame_queue_peek_writable(FrameQueue *f)
 {
     /* wait until we have space to put a new frame */
     SDL_LockMutex(f->mutex);
-    while (f->size >= f->max_size &&
-        !f->pktq->abort_request) {
+    while (f->size >= f->max_size && !f->pktq->abort_request) {
         SDL_CondWait(f->cond, f->mutex);
     }
     SDL_UnlockMutex(f->mutex);
 
-    if (f->pktq->abort_request)
+    if (f->pktq->abort_request) {
         return NULL;
+    }
 
     return &f->queue[f->windex];
 }
@@ -2159,22 +2161,24 @@ static Frame *frame_queue_peek_readable(FrameQueue *f)
 {
     /* wait until we have a readable a new frame */
     SDL_LockMutex(f->mutex);
-    while (f->size - f->rindex_shown <= 0 &&
-        !f->pktq->abort_request) {
+    while (f->size - f->rindex_shown <= 0 && !f->pktq->abort_request) {
         SDL_CondWait(f->cond, f->mutex);
     }
     SDL_UnlockMutex(f->mutex);
 
-    if (f->pktq->abort_request)
+    if (f->pktq->abort_request) {
         return NULL;
+    }
 
     return &f->queue[(f->rindex + f->rindex_shown) % f->max_size];
 }
 
 static void frame_queue_push(FrameQueue *f)
 {
-    if (++f->windex == f->max_size)
+    if (++f->windex == f->max_size) {
         f->windex = 0;
+    }
+
     SDL_LockMutex(f->mutex);
     f->size++;
     SDL_CondSignal(f->cond);
@@ -2219,28 +2223,36 @@ static int64_t frame_queue_last_pos(FrameQueue *f)
 
 static int packet_queue_put_private(PacketQueue *q, AVPacket *pkt)
 {
-    MyAVPacketList *pkt1;
+    MyAVPacketList *pkt_node;
 
-    if (q->abort_request)
+    if (q->abort_request) {
         return -1;
+    }
 
-    pkt1 = av_malloc(sizeof(MyAVPacketList));
-    if (!pkt1)
+    pkt_node = av_malloc(sizeof(MyAVPacketList));
+    if (!pkt_node) {
         return -1;
-    pkt1->pkt = *pkt;
-    pkt1->next = NULL;
-    if (pkt == &flush_pkt)
+    }
+
+    pkt_node->pkt = *pkt;
+    pkt_node->next = NULL;
+    if (pkt == &flush_pkt) {
         q->serial++;
-    pkt1->serial = q->serial;
+    }
+    pkt_node->serial = q->serial;
 
-    if (!q->last_pkt)
-        q->first_pkt = pkt1;
-    else
-        q->last_pkt->next = pkt1;
-    q->last_pkt = pkt1;
+    if (!q->last_pkt) {
+        q->first_pkt = pkt_node;
+    }
+    else {
+        q->last_pkt->next = pkt_node;
+    }
+
+    q->last_pkt = pkt_node;
     q->nb_packets++;
-    q->size += pkt1->pkt.size + sizeof(*pkt1);
-    q->duration += pkt1->pkt.duration;
+    q->size += pkt_node->pkt.size + sizeof(*pkt_node);
+    q->duration += pkt_node->pkt.duration;
+
     /* XXX: should duplicate packet data in DV case */
     SDL_CondSignal(q->cond);
     return 0;
@@ -2254,8 +2266,9 @@ static int packet_queue_put(PacketQueue *q, AVPacket *pkt)
     ret = packet_queue_put_private(q, pkt);
     SDL_UnlockMutex(q->mutex);
 
-    if (pkt != &flush_pkt && ret < 0)
+    if (pkt != &flush_pkt && ret < 0) {
         av_packet_unref(pkt);
+    }
 
     return ret;
 }
@@ -2298,6 +2311,7 @@ static void packet_queue_flush(PacketQueue *q)
         av_packet_unref(&pkt->pkt);
         av_freep(&pkt);
     }
+
     q->last_pkt = NULL;
     q->first_pkt = NULL;
     q->nb_packets = 0;
@@ -2335,29 +2349,36 @@ static void packet_queue_start(PacketQueue *q)
 /* return < 0 if aborted, 0 if no packet and > 0 if packet.  */
 static int packet_queue_get(PacketQueue *q, AVPacket *pkt, int block, int *serial)
 {
-    MyAVPacketList *pkt1;
+    MyAVPacketList *pkt_node;
     int ret;
 
     SDL_LockMutex(q->mutex);
 
-    for (;;) {
+    while (1)
+    {
         if (q->abort_request) {
             ret = -1;
             break;
         }
 
-        pkt1 = q->first_pkt;
-        if (pkt1) {
-            q->first_pkt = pkt1->next;
-            if (!q->first_pkt)
+        pkt_node = q->first_pkt;
+        if (pkt_node)
+        {
+            q->first_pkt = pkt_node->next;
+            if (NULL == q->first_pkt) {
                 q->last_pkt = NULL;
+            }
+
             q->nb_packets--;
-            q->size -= pkt1->pkt.size + sizeof(*pkt1);
-            q->duration -= pkt1->pkt.duration;
-            *pkt = pkt1->pkt;
-            if (serial)
-                *serial = pkt1->serial;
-            av_free(pkt1);
+            q->size -= pkt_node->pkt.size + sizeof(*pkt_node);
+            q->duration -= pkt_node->pkt.duration;
+            *pkt = pkt_node->pkt;
+
+            if (serial) {
+                *serial = pkt_node->serial;
+            }
+
+            av_free(pkt_node);
             ret = 1;
             break;
         }
@@ -2369,6 +2390,7 @@ static int packet_queue_get(PacketQueue *q, AVPacket *pkt, int block, int *seria
             SDL_CondWait(q->cond, q->mutex);
         }
     }
+
     SDL_UnlockMutex(q->mutex);
     return ret;
 }
@@ -3529,17 +3551,20 @@ AVDictionary **setup_find_stream_info_opts(AVFormatContext *s, AVDictionary *cod
     int i;
     AVDictionary **opts;
 
-    if (!s->nb_streams)
-        return NULL;
-    opts = av_mallocz_array(s->nb_streams, sizeof(*opts));
-    if (!opts) {
-        av_log(NULL, AV_LOG_ERROR,
-            "Could not alloc memory for stream options.\n");
+    if (!s->nb_streams) {
         return NULL;
     }
-    for (i = 0; i < s->nb_streams; i++)
-        opts[i] = filter_codec_opts(codec_opts, s->streams[i]->codecpar->codec_id,
-        s, s->streams[i], NULL);
+
+    opts = av_mallocz_array(s->nb_streams, sizeof(*opts));
+    if (!opts) {
+        av_log(NULL, AV_LOG_ERROR, "Could not alloc memory for stream options.\n");
+        return NULL;
+    }
+
+    for (i = 0; i < s->nb_streams; i++) {
+        opts[i] = filter_codec_opts(codec_opts, s->streams[i]->codecpar->codec_id, s, s->streams[i], NULL);
+    }
+
     return opts;
 }
 
