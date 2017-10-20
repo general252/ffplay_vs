@@ -1,4 +1,5 @@
 #include "play.h"
+#include <stdio.h>
 
 #pragma comment(lib, "avcodec.lib")
 #pragma comment(lib, "avformat.lib")
@@ -13,7 +14,14 @@
 
 int main(int argc, char *argv[])
 {
-    play("../xibushijie.mp4");
+    struct VideoState* is = NULL;
+
+    int times = 0;
+    play(&is, "../xibushijie.mp4");
+
+    while (1) {
+        event_loop(is);
+    }
 
     return 0;
 }
