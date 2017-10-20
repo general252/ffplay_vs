@@ -41,7 +41,7 @@
 #define P_SDL_AUDIO_MAX_CALLBACKS_PER_SEC 30
 
 /* Step size for volume control in dB */
-#define P_SDL_VOLUME_STEP (0.75)
+#define P_SDL_VOLUME_STEP (0.75) /** 声音大小控制步进值*/
 
 #define P_SDL_CURSOR_HIDE_DELAY 1000000 /**播放时, 鼠标静止后自动隐藏时长*/
 
