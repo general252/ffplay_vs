@@ -21,6 +21,10 @@ int main(int argc, char *argv[])
 
     while (1) {
         event_loop(is);
+
+        if (100 == times++) {
+            stream_seek_percent(is, 0.5);
+        }
     }
 
     return 0;
