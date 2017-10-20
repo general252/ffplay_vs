@@ -43,6 +43,10 @@
 /* Step size for volume control in dB */
 #define SDL_VOLUME_STEP (0.75)
 
+#define SDL_CURSOR_HIDE_DELAY 1000000 /**播放时, 鼠标静止后自动隐藏时长*/
+
+#define USE_ONEPASS_SUBTITLE_RENDER 1
+
 /* no AV sync correction is done if below the minimum AV sync threshold */
 #define AV_SYNC_THRESHOLD_MIN 0.04
 /* AV sync correction is done if above the maximum AV sync threshold */
@@ -69,12 +73,6 @@
 /* NOTE: the size must be big enough to compensate the hardware audio buffersize size */
 /* TODO: We assume that a decoded and resampled frame fits into this buffer */
 #define SAMPLE_ARRAY_SIZE (8 * 65536)
-
-#define CURSOR_HIDE_DELAY 1000000
-
-#define USE_ONEPASS_SUBTITLE_RENDER 1
-
-static unsigned sws_flags = SWS_BICUBIC;
 
 typedef struct MyAVPacketList {
     AVPacket pkt;
@@ -184,7 +182,7 @@ typedef struct VideoState {
     int64_t seek_rel;
     int read_pause_return;
     AVFormatContext *ic;
-    int realtime;
+    int realtime; // 是rtp、sdp实时流
 
     Clock audclk;
     Clock vidclk;
@@ -259,7 +257,7 @@ typedef struct VideoState {
 
     char *filename;
     int width, height, xleft, ytop;
-    int step;
+    int step; // 逐帧播放
 
     int last_video_stream, last_audio_stream, last_subtitle_stream;
 
@@ -267,55 +265,58 @@ typedef struct VideoState {
 } VideoState;
 
 
-AVDictionary *format_opts, *codec_opts, *resample_opts;
-
-/* options specified by the user */
-
-static int64_t start_time = AV_NOPTS_VALUE;
-static int64_t duration = AV_NOPTS_VALUE;
-
-static enum ShowMode show_mode = SHOW_MODE_NONE;
-
-static AVPacket flush_pkt;
-
-static SDL_Window *window;
-static SDL_Renderer *renderer;
-
+// 播放窗口相关
+static SDL_Window *window; // 播放器窗口
+static SDL_Renderer *renderer; // 播放渲染器
 static const char *window_title;
 static int default_width = 640;
 static int default_height = 480;
 static int screen_width = 0;
 static int screen_height = 0;
-static int audio_disable;
-static int video_disable;
-static int subtitle_disable;
+static int borderless; // 播放器是否有边框
+static int is_full_screen; // 是否全屏播放
+static int64_t cursor_last_shown; // 控制鼠标隐藏
+static int cursor_shown = 1; // 鼠标是否显示, 鼠标移动显示, 停留一定时间(CURSOR_HIDE_DELAY)隐藏
+
+static const char *audio_codec_name; // 强制使用音频解码器的名称, 如aac
+static const char *subtitle_codec_name;
+static const char *video_codec_name; // 如h264、hevc
+
+static int show_status = 1; // 打印信息
+
+static enum ShowMode show_mode = SHOW_MODE_NONE; //SHOW_MODE_RDFT
+
+static int audio_enable = 1;    // 音频播放使能
+static int video_enable = 1;    // 视频播放使能
+static int subtitle_enable = 1; // 字幕播放使能
+
+AVDictionary *format_opts, *codec_opts, *resample_opts;
+
+
+
+
+
+/* options specified by the user */
+
+static int64_t start_time = AV_NOPTS_VALUE; // 文件开始播放时的时间(用于播放调整)
+static int64_t duration = AV_NOPTS_VALUE; // 持续时间(不晓得啥用处, 在判断pakcet.pts pkt_in_play_range 时用到)
+
+static AVPacket flush_pkt;
+
+double rdftspeed = 0.02; // Rdft速度, 参考SHOW_MODE_RDFT
+static int64_t audio_callback_time; //! 记录音频回调的时间
+
 static const char* wanted_stream_spec[AVMEDIA_TYPE_NB] = { 0 };
 static int seek_by_bytes = -1;
-static int display_disable;
-static int borderless;
-static int show_status = 1;
 
-static int fast = 0;
-static int genpts = 0;
-static int lowres = 0;
+static int fast = 0; //! Allow non spec compliant speedup tricks.
+static int genpts = 0; //! Generate missing pts even if it requires parsing future frames.
+static int lowres = 0; //! lowres value supported by the decoder
 static int decoder_reorder_pts = -1;
-static int autoexit;
-static int exit_on_keydown;
-static int exit_on_mousedown;
-static int loop = 1;
-static int framedrop = -1;
-static int infinite_buffer = -1;
-static const char *audio_codec_name;
-static const char *subtitle_codec_name;
-static const char *video_codec_name;
-double rdftspeed = 0.02;
-static int64_t cursor_last_shown;
-static int cursor_hidden = 0;
-static int autorotate = 1;
+static int framedrop = -1; //! drop frames when cpu is too slow
+static int infinite_buffer = -1; // 是否限制packet队列的大小(实时流[rtp、sdp]不限制)
 
-/* current context */
-static int is_full_screen;
-static int64_t audio_callback_time;
+
 
 
 static int read_thread(void *arg);
@@ -335,16 +336,17 @@ static void update_volume(VideoState *is, int sign, double step);
 static void step_to_next_frame(VideoState *is);
 static void toggle_full_screen(VideoState *is);
 static void toggle_audio_display(VideoState *is);
+static void seek_chapter(VideoState *is, int incr);
 
 
 // audio video sync
-static int get_master_sync_type(VideoState *is);
+static int    get_master_sync_type(VideoState *is);
 static double get_master_clock(VideoState *is);
-static int synchronize_audio(VideoState *is, int nb_samples);
-static void check_external_clock_speed(VideoState *is);
+static int    synchronize_audio(VideoState *is, int nb_samples);
+static void   check_external_clock_speed(VideoState *is);
 static double compute_target_delay(double delay, VideoState *is);
 static double vp_duration(VideoState *is, Frame *vp, Frame *nextvp);
-static void update_video_pts(VideoState *is, double pts, int64_t pos, int serial);
+static void   update_video_pts(VideoState *is, double pts, int64_t pos, int serial);
 
 // clock相关
 static double get_clock(Clock *c);
@@ -390,14 +392,14 @@ static void decoder_abort(Decoder *d, FrameQueue *fq);
 
 // texture相关
 static inline void fill_rectangle(int x, int y, int w, int h);
-static void set_default_window_size(int width, int height, AVRational sar);
-static int realloc_texture(SDL_Texture **texture, Uint32 new_format, int new_width, int new_height, SDL_BlendMode blendmode, int init_texture);
-static void calculate_display_rect(SDL_Rect *rect, int scr_xleft, int scr_ytop, int scr_width, int scr_height, int pic_width, int pic_height, AVRational pic_sar);
-static int upload_texture(SDL_Texture *tex, AVFrame *frame, struct SwsContext **img_convert_ctx);
+static void        set_default_window_size(int width, int height, AVRational sar);
+static int         realloc_texture(SDL_Texture **texture, Uint32 new_format, int new_width, int new_height, SDL_BlendMode blendmode, int init_texture);
+static void        calculate_display_rect(SDL_Rect *rect, int scr_xleft, int scr_ytop, int scr_width, int scr_height, int pic_width, int pic_height, AVRational pic_sar);
+static int         upload_texture(SDL_Texture *tex, AVFrame *frame, struct SwsContext **img_convert_ctx);
 
 // AVDictionary
-AVDictionary *filter_codec_opts(AVDictionary *opts, enum AVCodecID codec_id, AVFormatContext *s, AVStream *st, AVCodec *codec);
-AVDictionary **setup_find_stream_info_opts(AVFormatContext *s, AVDictionary *codec_opts);
+AVDictionary *  filter_codec_opts(AVDictionary *opts, enum AVCodecID codec_id, AVFormatContext *s, AVStream *st, AVCodec *codec);
+AVDictionary ** setup_find_stream_info_opts(AVFormatContext *s, AVDictionary *codec_opts);
 
 
 // other
@@ -769,17 +771,17 @@ static void video_refresh(void *opaque, double *remaining_time)
 
     Frame *sp, *sp2;
 
-    if (!is->paused && get_master_sync_type(is) == AV_SYNC_EXTERNAL_CLOCK && is->realtime) {
+    if (!is->paused && get_master_sync_type(is) == AV_SYNC_EXTERNAL_CLOCK && is->realtime) { /*如果用外部时钟同步的话*/
         check_external_clock_speed(is);
     }
 
-    if (!display_disable && is->show_mode != SHOW_MODE_VIDEO && is->audio_st)
+    if (video_enable && is->show_mode != SHOW_MODE_VIDEO && is->audio_st) // 不显示视频(有音频), 作一下处理
     {
         time = av_gettime_relative() / 1000000.0;
-        if (is->force_refresh || is->last_vis_time + rdftspeed < time)
+        if (is->force_refresh || is->last_vis_time + rdftspeed < time) /** 强制刷新视频*/
         {
             video_display(is);
-            is->last_vis_time = time;
+            is->last_vis_time = time; /** 记录本次的时间*/
         }
 
         *remaining_time = FFMIN(*remaining_time, is->last_vis_time + rdftspeed - time);
@@ -817,6 +819,7 @@ retry:
             /* compute nominal last_duration */
             last_duration = vp_duration(is, lastvp, vp); //! 将当前帧vp的pts减去上一帧lastvp的pts, 得到中间时间差, 并检查差值是否在合理范围
             delay = compute_target_delay(last_duration, is); //! 以视频或音频为参考标准, 控制延时来保证音视频的同步
+                                                             //! 通过上一帧的情况来预测本次的情况,这样可以得到下一帧的到来时间
 
             time = av_gettime_relative() / 1000000.0; //! 获取当前时间
             if (time < is->frame_timer + delay) {  //! 假如当前时间小于frame_timer + delay, 也就是这帧改显示的时间超前, 还没到, 跳转处理
@@ -835,14 +838,16 @@ retry:
             }
             SDL_UnlockMutex(is->pictq.mutex);
 
+            /*如果缓冲中帧数比较多的时候,例如下一帧也已经到了*/
             if (frame_queue_nb_remaining(&is->pictq) > 1)
             {
                 Frame *nextvp = frame_queue_peek_next(&is->pictq);
-                duration = vp_duration(is, vp, nextvp);
-                if (!is->step && (framedrop>0 || (framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER)) && time > is->frame_timer + duration)
+                duration = vp_duration(is, vp, nextvp); /*这个时候,应该用已经在缓存中的下一帧pts-当前pts来真实计算当前持续显示时间*/
+                if (!is->step && (framedrop > 0 || (framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER)) && time > is->frame_timer + duration)
                 {
+                    /*如果延迟时间超过一帧了,就采取丢掉当前帧*/
                     is->frame_drops_late++;
-                    frame_queue_next(&is->pictq);
+                    frame_queue_next(&is->pictq); /*采取丢帧策略,丢弃迟来的帧,取下一帧*/
                     goto retry;
                 }
             }
@@ -898,7 +903,7 @@ retry:
 
 display:
         /* display picture */
-        if (!display_disable && is->force_refresh && is->show_mode == SHOW_MODE_VIDEO && is->pictq.rindex_shown) {
+        if (video_enable && is->force_refresh && is->show_mode == SHOW_MODE_VIDEO && is->pictq.rindex_shown) {
             video_display(is);
         }
     }
@@ -1437,8 +1442,7 @@ static int stream_component_open(VideoState *is, int stream_index)
 
     avctx->codec_id = codec->id;
     if (stream_lowres > av_codec_get_max_lowres(codec)){
-        av_log(avctx, AV_LOG_WARNING, "The maximum value for lowres supported by the decoder is %d\n",
-            av_codec_get_max_lowres(codec));
+        av_log(avctx, AV_LOG_WARNING, "The maximum value for lowres supported by the decoder is %d\n", av_codec_get_max_lowres(codec));
         stream_lowres = av_codec_get_max_lowres(codec);
     }
     av_codec_set_lowres(avctx, stream_lowres);
@@ -1643,17 +1647,13 @@ static int stream_has_enough_packets(AVStream *st, int stream_id, PacketQueue *q
 
 static int is_realtime(AVFormatContext *s)
 {
-    if (!strcmp(s->iformat->name, "rtp")
-        || !strcmp(s->iformat->name, "rtsp")
-        || !strcmp(s->iformat->name, "sdp")
-        )
+    if (!strcmp(s->iformat->name, "rtp") || !strcmp(s->iformat->name, "rtsp") || !strcmp(s->iformat->name, "sdp")) {
         return 1;
+    }
 
-    if (s->pb && (!strncmp(s->filename, "rtp:", 4)
-        || !strncmp(s->filename, "udp:", 4)
-        )
-        )
+    if (s->pb && (!strncmp(s->filename, "rtp:", 4) || !strncmp(s->filename, "udp:", 4))) {
         return 1;
+    }
     return 0;
 }
 
@@ -1741,9 +1741,9 @@ static void refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
     double remaining_time = 0.0;
     SDL_PumpEvents();
     while (!SDL_PeepEvents(event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT)) {
-        if (!cursor_hidden && av_gettime_relative() - cursor_last_shown > CURSOR_HIDE_DELAY) {
+        if (cursor_shown && av_gettime_relative() - cursor_last_shown > SDL_CURSOR_HIDE_DELAY) {
             SDL_ShowCursor(0);
-            cursor_hidden = 1;
+            cursor_shown = 0;
         }
         if (remaining_time > 0.0)
             av_usleep((int64_t)(remaining_time * 1000000.0));
@@ -1760,32 +1760,6 @@ static void refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
 
 
 
-static void seek_chapter(VideoState *is, int incr)
-{
-    int64_t pos = get_master_clock(is) * AV_TIME_BASE;
-    int i;
-
-    if (!is->ic->nb_chapters)
-        return;
-
-    /* find the current chapter */
-    for (i = 0; i < is->ic->nb_chapters; i++) {
-        AVChapter *ch = is->ic->chapters[i];
-        if (av_compare_ts(pos, AV_TIME_BASE_Q, ch->start, ch->time_base) < 0) {
-            i--;
-            break;
-        }
-    }
-
-    i += incr;
-    i = FFMAX(i, 0);
-    if (i >= is->ic->nb_chapters)
-        return;
-
-    av_log(NULL, AV_LOG_VERBOSE, "Seeking to chapter %d.\n", i);
-    stream_seek(is, av_rescale_q(is->ic->chapters[i]->start, is->ic->chapters[i]->time_base,
-        AV_TIME_BASE_Q), 0, 0);
-}
 
 /* handle an event sent by the GUI */
 static void event_loop(VideoState *is)
@@ -1798,10 +1772,6 @@ static void event_loop(VideoState *is)
         refresh_loop_wait_event(is, &event);
         switch (event.type) {
         case SDL_KEYDOWN:
-            if (exit_on_keydown) {
-                do_exit(is);
-                break;
-            }
             switch (event.key.keysym.sym) {
             case SDLK_ESCAPE:
             case SDLK_q:
@@ -1902,10 +1872,6 @@ static void event_loop(VideoState *is)
             }
             break;
         case SDL_MOUSEBUTTONDOWN:
-            if (exit_on_mousedown) {
-                do_exit(is);
-                break;
-            }
             if (event.button.button == SDL_BUTTON_LEFT) {
                 static int64_t last_mouse_left_click = 0;
                 if (av_gettime_relative() - last_mouse_left_click <= 500000) {
@@ -1918,9 +1884,9 @@ static void event_loop(VideoState *is)
                 }
             }
         case SDL_MOUSEMOTION:
-            if (cursor_hidden) {
+            if (0 == cursor_shown) {
                 SDL_ShowCursor(1);
-                cursor_hidden = 0;
+                cursor_shown = 1;
             }
             cursor_last_shown = av_gettime_relative();
             if (event.type == SDL_MOUSEBUTTONDOWN) {
@@ -1994,11 +1960,9 @@ int play(const char* filename)
     av_register_all(); //! 注册所有编码器和解码器
     avformat_network_init();
 
-    if (display_disable) { video_disable = 1; }
-
     int flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER;
-    if (display_disable) { flags &= ~SDL_INIT_VIDEO; }
-    if (audio_disable) { flags &= ~SDL_INIT_AUDIO; }
+    if (!video_enable) { flags &= ~SDL_INIT_VIDEO; }
+    if (!audio_enable) { flags &= ~SDL_INIT_AUDIO; }
     else {
         /* Try to work around an occasional ALSA buffer underflow issue when the
         * period size is NPOT due to ALSA resampling by forcing the buffer size. */
@@ -2010,7 +1974,7 @@ int play(const char* filename)
     SDL_EventState(SDL_SYSWMEVENT, SDL_IGNORE);
     SDL_EventState(SDL_USEREVENT, SDL_IGNORE);
 
-    av_lockmgr_register(lockmgr);
+    av_lockmgr_register(lockmgr); // 解决多线程下的问题
 
     av_init_packet(&flush_pkt);
     flush_pkt.data = (uint8_t *)&flush_pkt;
@@ -2030,7 +1994,8 @@ int play(const char* filename)
 
 static int lockmgr(void **mtx, enum AVLockOp op)
 {
-    switch (op) {
+    switch (op)
+    {
     case AV_LOCK_CREATE:
         *mtx = SDL_CreateMutex();
         if (!*mtx) {
@@ -2192,8 +2157,9 @@ static void frame_queue_next(FrameQueue *f)
         return;
     }
     frame_queue_unref_item(&f->queue[f->rindex]);
-    if (++f->rindex == f->max_size)
+    if (++f->rindex == f->max_size) {
         f->rindex = 0;
+    }
     SDL_LockMutex(f->mutex);
     f->size--;
     SDL_CondSignal(f->cond);
@@ -2463,10 +2429,10 @@ static int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub)
         case AVMEDIA_TYPE_VIDEO:
             ret = avcodec_decode_video2(d->avctx, frame, &got_frame, &d->pkt_temp);
             if (got_frame) {
-                if (decoder_reorder_pts == -1) {
+                if (-1 == decoder_reorder_pts) {
                     frame->pts = av_frame_get_best_effort_timestamp(frame);
                 }
-                else if (!decoder_reorder_pts) {
+                else if (0 == decoder_reorder_pts) {
                     frame->pts = frame->pkt_dts;
                 }
             }
@@ -2585,13 +2551,17 @@ static void calculate_display_rect(SDL_Rect *rect,
     float aspect_ratio;
     int width, height, x, y;
 
-    if (pic_sar.num == 0)
+    if (pic_sar.num == 0) {
         aspect_ratio = 0;
-    else
+    }
+    else {
         aspect_ratio = av_q2d(pic_sar);
+    }
 
-    if (aspect_ratio <= 0.0)
+    if (aspect_ratio <= 0.0) {
         aspect_ratio = 1.0;
+    }
+
     aspect_ratio *= (float)pic_width / (float)pic_height;
 
     /* XXX: we suppose the screen has a 1.0 pixel ratio */
@@ -2601,6 +2571,7 @@ static void calculate_display_rect(SDL_Rect *rect,
         width = scr_width;
         height = lrint(width / aspect_ratio) & ~1;
     }
+
     x = (scr_width - width) / 2;
     y = (scr_height - height) / 2;
     rect->x = scr_xleft + x;
@@ -2609,9 +2580,11 @@ static void calculate_display_rect(SDL_Rect *rect,
     rect->h = FFMAX(height, 1);
 }
 
-static int upload_texture(SDL_Texture *tex, AVFrame *frame, struct SwsContext **img_convert_ctx) {
+static int upload_texture(SDL_Texture *tex, AVFrame *frame, struct SwsContext **img_convert_ctx)
+{
     int ret = 0;
-    switch (frame->format) {
+    switch (frame->format)
+    {
     case AV_PIX_FMT_YUV420P:
         if (frame->linesize[0] < 0 || frame->linesize[1] < 0 || frame->linesize[2] < 0) {
             av_log(NULL, AV_LOG_ERROR, "Negative linesize is not supported for YUV.\n");
@@ -2631,15 +2604,14 @@ static int upload_texture(SDL_Texture *tex, AVFrame *frame, struct SwsContext **
         break;
     default:
         /* This should only happen if we are not using avfilter... */
-        *img_convert_ctx = sws_getCachedContext(*img_convert_ctx,
-            frame->width, frame->height, frame->format, frame->width, frame->height,
-            AV_PIX_FMT_BGRA, sws_flags, NULL, NULL, NULL);
-        if (*img_convert_ctx != NULL) {
+        *img_convert_ctx = sws_getCachedContext(*img_convert_ctx, frame->width, frame->height, frame->format, frame->width, frame->height, AV_PIX_FMT_BGRA, SWS_BICUBIC, NULL, NULL, NULL);
+        if (*img_convert_ctx != NULL)
+        {
             uint8_t *pixels[4];
             int pitch[4];
-            if (!SDL_LockTexture(tex, NULL, (void **)pixels, pitch)) {
-                sws_scale(*img_convert_ctx, (const uint8_t * const *)frame->data, frame->linesize,
-                    0, frame->height, pixels, pitch);
+            if (!SDL_LockTexture(tex, NULL, (void **)pixels, pitch))
+            {
+                sws_scale(*img_convert_ctx, (const uint8_t * const *)frame->data, frame->linesize, 0, frame->height, pixels, pitch);
                 SDL_UnlockTexture(tex);
             }
         }
@@ -2659,8 +2631,10 @@ static int upload_texture(SDL_Texture *tex, AVFrame *frame, struct SwsContext **
 
 static double get_clock(Clock *c)
 {
-    if (*c->queue_serial != c->serial)
+    if (*c->queue_serial != c->serial) {
         return NAN;
+    }
+
     if (c->paused) {
         return c->pts;
     }
@@ -2849,19 +2823,19 @@ static int read_thread(void *arg)
         }
     }
 
-    if (!video_disable) {
+    if (video_enable) {
         st_index[AVMEDIA_TYPE_VIDEO] =
             av_find_best_stream(ic, AVMEDIA_TYPE_VIDEO,
             st_index[AVMEDIA_TYPE_VIDEO], -1, NULL, 0);
     }
-    if (!audio_disable) {
+    if (audio_enable) {
         st_index[AVMEDIA_TYPE_AUDIO] =
             av_find_best_stream(ic, AVMEDIA_TYPE_AUDIO,
                 st_index[AVMEDIA_TYPE_AUDIO],
                 st_index[AVMEDIA_TYPE_VIDEO],
                 NULL, 0);
     }
-    if (!video_disable && !subtitle_disable) {
+    if (video_enable && subtitle_enable) {
         st_index[AVMEDIA_TYPE_SUBTITLE] =
             av_find_best_stream(ic, AVMEDIA_TYPE_SUBTITLE,
                 st_index[AVMEDIA_TYPE_SUBTITLE],
@@ -2999,19 +2973,6 @@ static int read_thread(void *arg)
             continue;
         }
 
-        if (0 == is->paused &&
-            (NULL == is->audio_st || (is->auddec.finished == is->audioq.serial && frame_queue_nb_remaining(&is->sampq) == 0)) &&
-            (NULL == is->video_st || (is->viddec.finished == is->videoq.serial && frame_queue_nb_remaining(&is->pictq) == 0)))
-        {
-            if (loop != 1 && (!loop || --loop)) {
-                stream_seek(is, start_time != AV_NOPTS_VALUE ? start_time : 0, 0, 0);
-            }
-            else if (autoexit) {
-                ret = AVERROR_EOF;
-                goto fail;
-            }
-        }
-
         ret = av_read_frame(ic, pkt);
         if (ret < 0)
         {
@@ -3050,10 +3011,10 @@ static int read_thread(void *arg)
         {
             int64_t tmp_stream_start_time = (stream_start_time != AV_NOPTS_VALUE) ? stream_start_time : 0;
             int64_t tmp_start_time = (start_time != AV_NOPTS_VALUE) ? start_time : 0;
-            double diff_start_time = (pkt_ts - tmp_stream_start_time)* av_q2d(ic->streams[pkt->stream_index]->time_base) - (double)(tmp_start_time) / 1000000;
+            double pkt_duration_time = (pkt_ts - tmp_stream_start_time)* av_q2d(ic->streams[pkt->stream_index]->time_base) - (double)(tmp_start_time) / 1000000;
 
             if ( duration == AV_NOPTS_VALUE ||
-                 diff_start_time <= duration / 1000000.0 )
+                 pkt_duration_time <= duration / 1000000.0 )
             {
                 pkt_in_play_range = 1;
             }
@@ -3226,6 +3187,7 @@ static int subtitle_thread(void *arg)
 
 #pragma region audio_video_sync
 
+
 static int get_master_sync_type(VideoState *is) {
     if (is->av_sync_type == AV_SYNC_VIDEO_MASTER)
     {
@@ -3334,10 +3296,10 @@ static double compute_target_delay(double delay, VideoState *is)
     double sync_threshold, diff = 0;
 
     //! 因为音频是采样数据, 有固定的采用周期并且依赖于主系统时钟, 要调整音频的延时播放较难控制. 所以实际场合中视频同步音频相比音频同步视频实现起来更容易
-    /* update delay to follow master synchronisation source */
+    /* update delay to follow master synchronisation source */ 
     if (get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER) {
         /* if video is slave, we try to correct big delays by
-        duplicating or deleting a frame */
+        duplicating or deleting a frame */ /*我们通过复制和删除一帧来纠正大的延时*/
         //! 获取当前视频帧播放的时间, 与系统主时钟时间相减得到差值
         diff = get_clock(&is->vidclk) - get_master_clock(is);
 
@@ -3345,18 +3307,27 @@ static double compute_target_delay(double delay, VideoState *is)
         delay to compute the threshold. I still don't know
         if it is the best guess */
         sync_threshold = FFMAX(AV_SYNC_THRESHOLD_MIN, FFMIN(AV_SYNC_THRESHOLD_MAX, delay)); //! sync_threshold > AV_SYNC_THRESHOLD_MIN > 0
-        if (!isnan(diff) && fabs(diff) < is->max_frame_duration) {
-            if (diff <= -sync_threshold)
+        if (!isnan(diff) && fabs(diff) < is->max_frame_duration)
+        {
+            if (diff <= -sync_threshold) { /*当前视频帧落后于主时钟源*/
                 delay = FFMAX(0, delay + diff); //! diff < sync_threshold < 0, 将 delay置为0 (当前帧的播放时间，也就是pts，滞后于主时钟)
-            else if (diff >= sync_threshold && delay > AV_SYNC_FRAMEDUP_THRESHOLD)
+            }
+            else if (diff >= sync_threshold && delay > AV_SYNC_FRAMEDUP_THRESHOLD) { /*视频帧超前,但If a frame duration is longer than this, it will not be duplicated to compensate AV sync*/
+                /*大概意思是:
+                    本来当视频帧超前的时候,
+                    我们应该要选择重复该帧或者下面的2倍延时(即加重延时的策略),
+                    但因为该帧的显示时间大于显示更新门槛,
+                    所以这个时候不应该以该帧做同步*/
                 delay = delay + diff; //! 假如当前帧的播放时间(pts), 超前于主时钟, 并且delay还不小
-            else if (diff >= sync_threshold)
+            }
+            else if (diff >= sync_threshold) {
+                /*采取加倍延时*/
                 delay = 2 * delay; //! 假如当前帧的播放时间(pts)，超前于主时钟，那就需要加大延时
+            }
         }
     }
 
-    av_log(NULL, AV_LOG_TRACE, "video: delay=%0.3f A-V=%f\n",
-        delay, -diff);
+    av_log(NULL, AV_LOG_TRACE, "video: delay=%0.3f A-V=%f\n", delay, -diff);
 
     return delay;
 }
@@ -3483,6 +3454,33 @@ static void toggle_audio_display(VideoState *is)
     }
 }
 
+static void seek_chapter(VideoState *is, int incr)
+{
+    int64_t pos = get_master_clock(is) * AV_TIME_BASE;
+    int i;
+
+    if (!is->ic->nb_chapters) {
+        return;
+    }
+
+    /* find the current chapter */
+    for (i = 0; i < is->ic->nb_chapters; i++) {
+        AVChapter *ch = is->ic->chapters[i];
+        if (av_compare_ts(pos, AV_TIME_BASE_Q, ch->start, ch->time_base) < 0) {
+            i--;
+            break;
+        }
+    }
+
+    i += incr;
+    i = FFMAX(i, 0);
+    if (i >= is->ic->nb_chapters) {
+        return;
+    }
+
+    av_log(NULL, AV_LOG_VERBOSE, "Seeking to chapter %d.\n", i);
+    stream_seek(is, av_rescale_q(is->ic->chapters[i]->start, is->ic->chapters[i]->time_base, AV_TIME_BASE_Q), 0, 0);
+}
 
 #pragma endregion paly_ctrl
 
