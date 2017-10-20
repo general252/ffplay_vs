@@ -7,7 +7,7 @@ void event_loop(VideoState *is);
 
 void toggle_full_screen(VideoState *is);
 void toggle_pause(VideoState *is);
-void toggle_mute(is); // 是否静音
+void toggle_mute(VideoState* is); // 是否静音
 
 // update_volume(is, +1, P_SDL_VOLUME_STEP); // 声音增大
 // update_volume(is, -1, P_SDL_VOLUME_STEP); // 声音减小
