@@ -36,16 +36,16 @@
 #define EXTERNAL_CLOCK_MAX_FRAMES 10
 
 /* Minimum SDL audio buffer size, in samples. */
-#define SDL_AUDIO_MIN_BUFFER_SIZE 512
+#define P_SDL_AUDIO_MIN_BUFFER_SIZE 512
 /* Calculate actual buffer size keeping in mind not cause too frequent audio callbacks */
-#define SDL_AUDIO_MAX_CALLBACKS_PER_SEC 30
+#define P_SDL_AUDIO_MAX_CALLBACKS_PER_SEC 30
 
 /* Step size for volume control in dB */
-#define SDL_VOLUME_STEP (0.75)
+#define P_SDL_VOLUME_STEP (0.75)
 
-#define SDL_CURSOR_HIDE_DELAY 1000000 /**播放时, 鼠标静止后自动隐藏时长*/
+#define P_SDL_CURSOR_HIDE_DELAY 1000000 /**播放时, 鼠标静止后自动隐藏时长*/
 
-#define USE_ONEPASS_SUBTITLE_RENDER 1
+#define P_SDL_USE_ONEPASS_SUBTITLE_RENDER 1
 
 /* no AV sync correction is done if below the minimum AV sync threshold */
 #define AV_SYNC_THRESHOLD_MIN 0.04
@@ -498,7 +498,7 @@ static void video_image_display(VideoState *is)
     SDL_RenderCopyEx(renderer, is->vid_texture, NULL, &rect, 0, NULL, vp->flip_v ? SDL_FLIP_VERTICAL : 0);
     if (sp)
     {
-#if USE_ONEPASS_SUBTITLE_RENDER
+#if P_SDL_USE_ONEPASS_SUBTITLE_RENDER
         SDL_RenderCopy(renderer, is->sub_texture, NULL, &rect);
 #else
         int i;
@@ -1201,7 +1201,7 @@ static void sdl_audio_callback(void *opaque, Uint8 *stream, int len)
             {
                 /* if error, just output silence */
                 is->audio_buf = NULL;
-                is->audio_buf_size = SDL_AUDIO_MIN_BUFFER_SIZE / is->audio_tgt.frame_size * is->audio_tgt.frame_size;
+                is->audio_buf_size = P_SDL_AUDIO_MIN_BUFFER_SIZE / is->audio_tgt.frame_size * is->audio_tgt.frame_size;
             }
             else 
             {
@@ -1274,7 +1274,7 @@ static int audio_open(void *opaque, int64_t wanted_channel_layout, int wanted_nb
 
     wanted_spec.format = AUDIO_S16SYS;
     wanted_spec.silence = 0;
-    wanted_spec.samples = FFMAX(SDL_AUDIO_MIN_BUFFER_SIZE, 2 << av_log2(wanted_spec.freq / SDL_AUDIO_MAX_CALLBACKS_PER_SEC));
+    wanted_spec.samples = FFMAX(P_SDL_AUDIO_MIN_BUFFER_SIZE, 2 << av_log2(wanted_spec.freq / P_SDL_AUDIO_MAX_CALLBACKS_PER_SEC));
     wanted_spec.callback = sdl_audio_callback;
     wanted_spec.userdata = opaque;
     while (SDL_OpenAudio(&wanted_spec, &spec) < 0)
@@ -1741,7 +1741,7 @@ static void refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
     double remaining_time = 0.0;
     SDL_PumpEvents();
     while (!SDL_PeepEvents(event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT)) {
-        if (cursor_shown && av_gettime_relative() - cursor_last_shown > SDL_CURSOR_HIDE_DELAY) {
+        if (cursor_shown && av_gettime_relative() - cursor_last_shown > P_SDL_CURSOR_HIDE_DELAY) {
             SDL_ShowCursor(0);
             cursor_shown = 0;
         }
@@ -1790,11 +1790,11 @@ static void event_loop(VideoState *is)
                 break;
             case SDLK_KP_MULTIPLY:
             case SDLK_0:
-                update_volume(is, 1, SDL_VOLUME_STEP); // 声音增大
+                update_volume(is, 1, P_SDL_VOLUME_STEP); // 声音增大
                 break;
             case SDLK_KP_DIVIDE:
             case SDLK_9:
-                update_volume(is, -1, SDL_VOLUME_STEP); // 声音减小
+                update_volume(is, -1, P_SDL_VOLUME_STEP); // 声音减小
                 break;
             case SDLK_s: // S: Step to next frame
                 step_to_next_frame(is); // 下一帧
