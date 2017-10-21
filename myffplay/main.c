@@ -17,7 +17,7 @@ int main(int argc, char *argv[])
     struct VideoState* is = NULL;
 
     int times = 0;
-    play(&is, "../xibushijie.mp4");
+    play(&is, "http://live.hkstv.hk.lxdns.com/live/hks/playlist.m3u8");
 
     while (1) {
         event_loop(is);
