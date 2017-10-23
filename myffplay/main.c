@@ -19,13 +19,15 @@ int main(int argc, char *argv[])
     int times = 0;
     play(&is, "http://live.hkstv.hk.lxdns.com/live/hks/playlist.m3u8");
 
-    while (1) {
-        event_loop(is);
+    unsigned int evt = 0;
+
+    do {
+        evt = event_loop(is);
 
         if (100 == times++) {
             stream_seek_percent(is, 0.5);
         }
-    }
 
+    } while (evt != FF_SDL_STREAM_CLOSE_EVENT);
     return 0;
 }

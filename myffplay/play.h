@@ -1,9 +1,11 @@
 #pragma once
 
+#define FF_SDL_STREAM_CLOSE_EVENT    (0x8000 + 2) //SDL_USEREVENT
+
 typedef struct VideoState VideoState;
 
-int play(VideoState** video, const char* filename);
-void event_loop(VideoState *is);
+int  play(VideoState** video, const char* filename);
+unsigned int event_loop(VideoState *is);
 
 void toggle_full_screen(VideoState *is);
 void toggle_pause(VideoState *is);
@@ -18,5 +20,7 @@ void step_to_next_frame(VideoState *is);
 void stream_seek_percent(VideoState *is, double percent);
 
 void toggle_next_show_mode(VideoState *is);
+
+void toggle_close(VideoState* is);
 
 void show_paly_help();

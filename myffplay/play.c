@@ -106,8 +106,6 @@ typedef struct {
 #define SAMPLE_QUEUE_SIZE 9
 #define FRAME_QUEUE_SIZE FFMAX(SAMPLE_QUEUE_SIZE, FFMAX(VIDEO_PICTURE_QUEUE_SIZE, SUBPICTURE_QUEUE_SIZE))
 
-#define FF_QUIT_EVENT    (SDL_USEREVENT + 2)
-
 typedef struct AudioParams {
     int freq;
     int channels;
@@ -341,7 +339,7 @@ static int subtitle_thread(void *arg);
 static void stream_close(VideoState *is);
 
 // paly ctrl
-static void do_exit(VideoState *is);
+static void do_close(VideoState *is);
 static void stream_seek(VideoState *is, int64_t pos, int64_t rel, int seek_by_bytes);
 static void stream_toggle_pause(VideoState *is);
 //     void toggle_pause(VideoState *is);
@@ -750,7 +748,7 @@ static int video_open(VideoState *is)
 
     if (!window || !renderer) {
         av_log(NULL, AV_LOG_FATAL, "SDL: could not set video mode - exiting\n");
-        do_exit(is);
+        toggle_close(is);
     }
 
     is->width = w;
@@ -1758,9 +1756,10 @@ the_end:
 }
 
 static void refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
+    int rc = -1;
     double remaining_time = 0.0;
     SDL_PumpEvents();
-    while (!SDL_PeepEvents(event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT)) {
+    while (!(rc = SDL_PeepEvents(event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT))) {
         if (cursor_shown && av_gettime_relative() - cursor_last_shown > P_SDL_CURSOR_HIDE_DELAY) {
             SDL_ShowCursor(0);
             cursor_shown = 0;
@@ -1771,6 +1770,10 @@ static void refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
         if (is->show_mode != SHOW_MODE_NONE && (!is->paused || is->force_refresh))
             video_refresh(is, &remaining_time);
         SDL_PumpEvents();
+    }
+
+    if (-1 == rc) {
+        av_log(NULL, AV_LOG_INFO, "SDL_PeepEvents error: %s\n", SDL_GetError());
     }
 }
 
@@ -1787,7 +1790,7 @@ void key_event_handler(VideoState* is, SDL_Event event)
     {
     case SDLK_ESCAPE:
     case SDLK_q:
-        do_exit(is); // ÍË³ö
+        toggle_close(is); // ÍË³ö
         break;
     case SDLK_f:
         toggle_full_screen(is); // È«ÆÁ
@@ -1898,19 +1901,22 @@ void key_event_handler(VideoState* is, SDL_Event event)
 
 
 /* handle an event sent by the GUI */
-void event_loop(VideoState *is)
+unsigned int event_loop(VideoState *is)
 {
     SDL_Event event;
     double incr, pos, frac;
     double x;
+    int rc = 0;
+
+    memset(&event, 0, sizeof(SDL_Event));
 
     refresh_loop_wait_event(is, &event);
 
     switch (event.type)
     {
     case SDL_QUIT:
-    case FF_QUIT_EVENT:
-        do_exit(is);
+    case FF_SDL_STREAM_CLOSE_EVENT:
+        do_close(is);
         break;
     case SDL_KEYDOWN:
         key_event_handler(is, event);
@@ -1994,6 +2000,8 @@ void event_loop(VideoState *is)
     default:
         break;
     } // end of switch (event.type)
+
+    return (0 != event.type) ? event.type : FF_SDL_STREAM_CLOSE_EVENT;
 }
 
 
@@ -3156,11 +3164,7 @@ fail:
     }
 
     if (ret != 0) {
-        SDL_Event event;
-
-        event.type = FF_QUIT_EVENT;
-        event.user.data1 = is;
-        SDL_PushEvent(&event);
+        toggle_close(is);
     }
 
     SDL_DestroyMutex(wait_mutex);
@@ -3475,7 +3479,7 @@ static void update_video_pts(VideoState *is, double pts, int64_t pos, int serial
 #pragma region paly_ctrl
 
 
-static void do_exit(VideoState *is)
+static void do_close(VideoState *is)
 {
     if (is) {
         stream_close(is);
@@ -3493,7 +3497,6 @@ static void do_exit(VideoState *is)
 
     SDL_Quit();
     av_log(NULL, AV_LOG_QUIET, "%s", "");
-    exit(0);
 }
 
 /* seek in the stream */
@@ -3583,6 +3586,15 @@ void toggle_full_screen(VideoState *is)
     SDL_SetWindowFullscreen(window, is_full_screen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 
     is->force_refresh = 1;
+}
+
+void toggle_close(VideoState* is)
+{
+    SDL_Event event;
+
+    event.type = FF_SDL_STREAM_CLOSE_EVENT;
+    event.user.data1 = is;
+    SDL_PushEvent(&event);
 }
 
 void toggle_next_show_mode(VideoState *is)
